@@ -7500,8 +7500,7 @@ func (e *Engine) activeSessionVisible(sm *SessionManager, sessionKey, userID str
 	if id == "" {
 		return true
 	}
-	_, ok := sm.VisibleAgentSessionIDs(sessionKey, e.sessionAdminCrossUserAllowed(userID))[id]
-	return ok
+	return sm.AgentSessionIDVisible(sessionKey, id, e.sessionAdminCrossUserAllowed(userID))
 }
 
 // filterOwnedSessions removes agent sessions that are not tracked by cc-connect's

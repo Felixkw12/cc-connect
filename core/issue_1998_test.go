@@ -138,10 +138,16 @@ func TestIssue1998UnknownAndAmbiguousOwnershipDenied(t *testing.T) {
 	if len(visible) != 1 || visible[0].ID != "alice-session" {
 		t.Fatalf("legacy/untracked visibility = %v, want only Alice", visible)
 	}
+	if !engine.sessions.AgentSessionIDVisible(msg.SessionKey, "alice-session", false) || engine.sessions.AgentSessionIDVisible(msg.SessionKey, "unknown-cli", false) {
+		t.Fatal("single-ID check disagrees with legacy/unknown ownership")
+	}
 	engine.sessions.GetOrCreateActive(msg.SessionKey).SetAgentSessionID("bob-session", agent.Name())
 	visible = engine.applySessionFilter(agent.sessions, engine.sessions, msg.SessionKey)
 	if len(visible) != 1 || visible[0].ID != "alice-session" {
 		t.Fatalf("ambiguous ownership leaked: %v", visible)
+	}
+	if engine.sessions.AgentSessionIDVisible(msg.SessionKey, "bob-session", true) || engine.sessions.AgentSessionIDVisible("plain:shared:bob", "bob-session", false) {
+		t.Fatal("single-ID check allowed ambiguous ownership")
 	}
 }
 

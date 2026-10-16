@@ -720,6 +720,45 @@ func (sm *SessionManager) VisibleAgentSessionIDs(userKey string, adminCrossUser 
 	return visible
 }
 
+// AgentSessionIDVisible checks one active ID without allocating the full
+// visibility set on every ordinary message. Ownership is still checked across
+// all keys so a legacy duplicate cannot be resumed by either user.
+func (sm *SessionManager) AgentSessionIDVisible(userKey, agentID string, adminCrossUser bool) bool {
+	if agentID == "" || agentID == ContinueSession {
+		return false
+	}
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	owner := ""
+	for key, sessionIDs := range sm.userSessions {
+		for _, sessionID := range sessionIDs {
+			s := sm.sessions[sessionID]
+			if s == nil {
+				continue
+			}
+			s.mu.Lock()
+			found := s.BorrowedAgentSessionID != agentID && s.AgentSessionID == agentID
+			if !found && s.BorrowedAgentSessionID != agentID {
+				for _, pastID := range s.PastAgentSessionIDs {
+					if pastID == agentID {
+						found = true
+						break
+					}
+				}
+			}
+			s.mu.Unlock()
+			if !found {
+				continue
+			}
+			if owner != "" && owner != key {
+				return false
+			}
+			owner = key
+		}
+	}
+	return owner != "" && (adminCrossUser || owner == userKey)
+}
+
 // AgentSessionOwners maps each known agent session ID to the user key
 // (session_key) that last used it. Agent sessions created directly through the
 // CLI have no owner and are absent from the map, so callers can tell "belongs to
