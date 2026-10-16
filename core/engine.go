@@ -17642,14 +17642,14 @@ func unsolicitedRelayText(result string, textParts []string) string {
 	text := result
 	if isSilentReply(text) {
 		text = strings.Join(textParts, "")
-		if isSilentReply(text) {
+		if strings.TrimSpace(text) == "" || isSilentReply(text) {
 			return ""
 		}
 	}
 	if stripped, ok := stripTrailingSilent(text); ok {
-		text = stripped
+		return stripped
 	}
-	return strings.TrimSpace(text)
+	return text
 }
 
 // couldBeSilentPrefix reports whether the trimmed text is still a case-insensitive

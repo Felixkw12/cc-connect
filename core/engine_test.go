@@ -14365,6 +14365,35 @@ func TestUnsolicitedReader_RelaysEventResult(t *testing.T) {
 	}
 }
 
+func TestUnsolicitedReader_PreservesOrdinaryReplyWhitespace(t *testing.T) {
+	for _, reply := range []string{
+		"    indented code block\n",
+		"  ordinary reply  ",
+	} {
+		t.Run(fmt.Sprintf("%q", reply), func(t *testing.T) {
+			p := &stubPlatformEngine{n: "test"}
+			sess := newControllableSession("unsol-whitespace")
+			e := NewEngine("test", &stubAgent{}, []Platform{p}, "", LangEnglish)
+			defer e.Stop()
+
+			key := "test:ch1:u1"
+			session := e.sessions.GetOrCreateActive(key)
+			state := &interactiveState{agentSession: sess, platform: p, replyCtx: "ctx"}
+			e.interactiveMu.Lock()
+			e.interactiveStates[key] = state
+			e.interactiveMu.Unlock()
+			e.startUnsolicitedReader(state, session, e.sessions, key, "")
+			defer e.stopUnsolicitedReader(state)
+
+			sess.events <- Event{Type: EventResult, Content: reply, Done: true}
+			sent := waitForPlatformSend(p, 1, 5*time.Second)
+			if len(sent) != 1 || sent[0] != reply {
+				t.Fatalf("ordinary background reply = %q, want exact %q", sent, reply)
+			}
+		})
+	}
+}
+
 // TestUnsolicitedReader_SuppressesSilentReply verifies that a background turn
 // resolving to the agent's silent-reply marker stays silent on the platform. The
 // foreground turn path strips NO_REPLY, but this reader used to relay the raw
@@ -14404,10 +14433,23 @@ func TestUnsolicitedReader_SuppressesSilentReply(t *testing.T) {
 			wantHist:  "NO_REPLY",
 		},
 		{
+			name:      "bare marker with whitespace-only chunks",
+			textParts: []string{"  \n  "},
+			result:    "NO_REPLY",
+			wantSent:  "",
+			wantHist:  "NO_REPLY",
+		},
+		{
 			name:     "trailing marker keeps the content",
 			result:   "仓库状态看完了，工作区干净。\nNO_REPLY",
 			wantSent: "仓库状态看完了，工作区干净。",
 			wantHist: "仓库状态看完了，工作区干净。\nNO_REPLY",
+		},
+		{
+			name:     "trailing marker keeps leading indentation",
+			result:   "    indented code block\nNO_REPLY",
+			wantSent: "    indented code block",
+			wantHist: "    indented code block\nNO_REPLY",
 		},
 	}
 
