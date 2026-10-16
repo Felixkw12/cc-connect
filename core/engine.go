@@ -7532,7 +7532,9 @@ func (e *Engine) cmdList(p Platform, msg *Message, args []string) {
 		return
 	}
 
-	if !supportsCards(p) {
+	// Cross-user admin access is a text-command privilege. A card action has
+	// no authenticated user ID at this layer, so keep cards strictly per-user.
+	if !supportsCards(p) || e.sessionAdminCrossUserAllowed(msg.UserID) {
 		agentSessions, err := agent.ListSessions(e.ctx)
 		if err != nil {
 			e.reply(p, msg.ReplyCtx, fmt.Sprintf(e.i18n.T(MsgListError), err))

@@ -191,6 +191,31 @@ func TestIssue1998AdminCrossUserRequiresExplicitOptIn(t *testing.T) {
 	}
 }
 
+func TestIssue1998AdminListOnCardPlatformUsesTextPrivilege(t *testing.T) {
+	platform := &stubCardPlatform{stubPlatformEngine: stubPlatformEngine{n: "feishu"}}
+	agent := &issue1998Agent{stubDeleteAgent: stubDeleteAgent{stubListAgent: stubListAgent{sessions: []AgentSessionInfo{
+		{ID: "alice-session", Summary: "alice-private-summary"},
+		{ID: "bob-session", Summary: "bob-private-summary"},
+	}}}}
+	engine := NewEngine("shared-project", agent, []Platform{platform}, "", LangEnglish)
+	engine.sessions.GetOrCreateActive("feishu:chat:alice").SetAgentSessionID("alice-session", agent.Name())
+	engine.sessions.GetOrCreateActive("feishu:chat:bob").SetAgentSessionID("bob-session", agent.Name())
+	engine.SetAdminFrom("alice")
+	engine.SetSessionAdminCrossUser(true)
+	alice := &Message{Platform: "feishu", UserID: "alice", SessionKey: "feishu:chat:alice", ReplyCtx: "ctx"}
+	engine.handleCommand(platform, alice, "/list")
+	if got := strings.Join(platform.getSent(), "\n"); !strings.Contains(got, "bob-private-summary") {
+		t.Fatalf("explicit admin /list on card platform did not show tracked Bob in text: %q", got)
+	}
+	if len(platform.repliedCards) != 0 {
+		t.Fatal("admin cross-user list rendered a card that could lose user authority")
+	}
+	card := engine.handleCardNav("nav:/list", alice.SessionKey)
+	if card == nil || strings.Contains(card.RenderText(), "bob-private-summary") {
+		t.Fatalf("card navigation widened to admin cross-user access: %v", card)
+	}
+}
+
 func TestIssue1998SharedSessionModeBlocksHistoryCommands(t *testing.T) {
 	engine, platform, agent, msg := issue1998Fixture(t)
 	engine.SetSharedSessionCommandPlatforms([]string{"plain"})
