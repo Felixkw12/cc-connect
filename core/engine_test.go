@@ -14374,7 +14374,7 @@ func TestUnsolicitedReader_PreservesOrdinaryReplyWhitespace(t *testing.T) {
 			p := &stubPlatformEngine{n: "test"}
 			sess := newControllableSession("unsol-whitespace")
 			e := NewEngine("test", &stubAgent{}, []Platform{p}, "", LangEnglish)
-			defer e.Stop()
+			defer func() { _ = e.Stop() }()
 
 			key := "test:ch1:u1"
 			session := e.sessions.GetOrCreateActive(key)
