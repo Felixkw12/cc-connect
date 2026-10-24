@@ -695,6 +695,11 @@ func (cs *claudeSession) handleReadLoopLine(line string) {
 //   - subagent (sidechain) output seen since the last user prompt — the turn
 //     was driven by a subagent finishing.
 //
+// The sidechain observation is scoped to the turn that made it: it is
+// consumed when a terminal result closes that turn (see handleResult) and
+// when a new user prompt starts one (see Send). Reading it here therefore
+// never leaks the observation into an unrelated later turn.
+//
 // The adapter only reports what it observed; core decides what to report
 // when nothing is observed (see core/trigger_source.go).
 func (cs *claudeSession) turnTriggerSource(raw map[string]any) string {
@@ -1365,6 +1370,19 @@ func (cs *claudeSession) handleResult(raw map[string]any) {
 	}
 	cs.usageMu.Unlock()
 
+	// The sidechain observation belongs to the turn that ends here. Consume
+	// it so the NEXT turn — including an unsolicited one, which never goes
+	// through Send() and therefore never resets the marker — is not
+	// misattributed to a subagent that had nothing to do with it.
+	//
+	// A mid-turn compaction result does not end the turn (the CLI keeps
+	// streaming), so it must leave the observation in place for the turn's
+	// final result.
+	triggerSource := cs.turnTriggerSource(raw)
+	if !isCompaction {
+		cs.sidechainSeen.Store(false)
+	}
+
 	evt := core.Event{
 		Type:                     core.EventResult,
 		Content:                  content,
@@ -1374,7 +1392,7 @@ func (cs *claudeSession) handleResult(raw map[string]any) {
 		OutputTokens:             outputTokens,
 		CacheCreationInputTokens: cacheCreationTokens,
 		CacheReadInputTokens:     cacheReadTokens,
-		TriggerSource:            cs.turnTriggerSource(raw),
+		TriggerSource:            triggerSource,
 	}
 	select {
 	case cs.events <- evt:

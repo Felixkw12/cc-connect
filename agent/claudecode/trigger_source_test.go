@@ -101,3 +101,92 @@ func TestSendResetsSidechainMarker(t *testing.T) {
 		t.Fatal("a new user-initiated turn must reset the subagent marker")
 	}
 }
+
+// TestTerminalResultConsumesSidechainMarker verifies that the subagent
+// observation is scoped to the turn that made it: once a terminal result
+// closes that turn, a later result — an unsolicited one in particular, which
+// never goes through Send() — must not be reported as subagent-triggered.
+func TestTerminalResultConsumesSidechainMarker(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cs := &claudeSession{
+		events: make(chan core.Event, 8),
+		ctx:    ctx,
+	}
+	cs.handleReadLoopLine(`{"type":"assistant","parent_tool_use_id":"toolu_01","message":{"content":[]}}`)
+	cs.handleResult(map[string]any{
+		"type":      "result",
+		"result":    "subagent finished",
+		"num_turns": float64(1),
+	})
+
+	evt := <-cs.events
+	if evt.TriggerSource != core.TriggerSourceSubagent {
+		t.Fatalf("TriggerSource = %q, want %q", evt.TriggerSource, core.TriggerSourceSubagent)
+	}
+	if !evt.Done {
+		t.Fatal("a plain result must close the turn (Done = true)")
+	}
+
+	// The next turn is unrelated to the subagent that just finished.
+	cs.handleResult(map[string]any{
+		"type":      "result",
+		"result":    "unrelated",
+		"num_turns": float64(1),
+	})
+
+	evt = <-cs.events
+	if evt.TriggerSource != "" {
+		t.Fatalf("TriggerSource = %q, want empty: the subagent observation belongs to the turn that already ended", evt.TriggerSource)
+	}
+}
+
+// TestCompactionResultKeepsSidechainMarker verifies that a mid-turn
+// compaction result — which does not end the turn — leaves the subagent
+// observation in place, so the turn's final result still reports it.
+func TestCompactionResultKeepsSidechainMarker(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cs := &claudeSession{
+		events: make(chan core.Event, 8),
+		ctx:    ctx,
+	}
+	cs.handleReadLoopLine(`{"type":"assistant","parent_tool_use_id":"toolu_01","message":{"content":[]}}`)
+	cs.handleResult(map[string]any{
+		"type":      "result",
+		"result":    "compacted",
+		"subtype":   "compact",
+		"num_turns": float64(1),
+	})
+
+	evt := <-cs.events
+	if evt.Done {
+		t.Fatal("a compaction result must not close the turn (Done = false)")
+	}
+	if evt.TriggerSource != core.TriggerSourceSubagent {
+		t.Fatalf("TriggerSource = %q, want %q", evt.TriggerSource, core.TriggerSourceSubagent)
+	}
+	if !cs.sidechainSeen.Load() {
+		t.Fatal("a mid-turn compaction result must not consume the subagent observation")
+	}
+
+	// The turn's final result still reports the subagent trigger.
+	cs.handleResult(map[string]any{
+		"type":      "result",
+		"result":    "subagent finished",
+		"num_turns": float64(2),
+	})
+
+	evt = <-cs.events
+	if !evt.Done {
+		t.Fatal("the final result must close the turn (Done = true)")
+	}
+	if evt.TriggerSource != core.TriggerSourceSubagent {
+		t.Fatalf("TriggerSource = %q, want %q", evt.TriggerSource, core.TriggerSourceSubagent)
+	}
+	if cs.sidechainSeen.Load() {
+		t.Fatal("the terminal result must consume the subagent observation")
+	}
+}
