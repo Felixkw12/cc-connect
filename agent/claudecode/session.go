@@ -53,6 +53,12 @@ type claudeSession struct {
 	// reaches the user once.
 	lastModelSwitch atomic.Value // stores string
 
+	// sidechainSeen records that the CLI produced output inside a subagent
+	// (Task tool) sidechain since the last user-initiated turn. It lets the
+	// turn's result report "subagent" as its trigger source, which core
+	// cannot know on its own (issue #1803).
+	sidechainSeen atomic.Bool
+
 	// usageMu guards lastUsage. Populated from the most recent result event.
 	usageMu   sync.Mutex
 	lastUsage *core.ContextUsage
@@ -648,6 +654,14 @@ func (cs *claudeSession) handleReadLoopLine(line string) {
 	eventType, _ := raw["type"].(string)
 	slog.Debug("claudeSession: event", "type", eventType)
 
+	// Claude Code marks output produced inside a subagent (the Task tool)
+	// with a non-empty parent_tool_use_id. Remember it so the turn's result
+	// can report what triggered the turn — a subagent completion callback is
+	// invisible to core otherwise (issue #1803).
+	if sidechainParentToolUseID(raw) != "" {
+		cs.sidechainSeen.Store(true)
+	}
+
 	switch eventType {
 	case "system":
 		cs.handleSystem(raw)
@@ -671,6 +685,45 @@ func (cs *claudeSession) handleReadLoopLine(line string) {
 		// than the top-level event type.
 		slog.Debug("claudeSession: unrecognized event type", "type", eventType, "raw", raw)
 	}
+}
+
+// turnTriggerSource works out what triggered the turn this result closes,
+// as far as the CLI's stream reveals it. Two signals are available:
+//
+//   - origin.kind == "task-notification" — the CLI reports the turn as the
+//     handling of a background task completion.
+//   - subagent (sidechain) output seen since the last user prompt — the turn
+//     was driven by a subagent finishing.
+//
+// The adapter only reports what it observed; core decides what to report
+// when nothing is observed (see core/trigger_source.go).
+func (cs *claudeSession) turnTriggerSource(raw map[string]any) string {
+	if origin, _ := raw["origin"].(map[string]any); origin != nil {
+		if kind, _ := origin["kind"].(string); kind == "task-notification" {
+			return core.TriggerSourceTaskNotification
+		}
+	}
+	if cs.sidechainSeen.Load() {
+		return core.TriggerSourceSubagent
+	}
+	return ""
+}
+
+// sidechainParentToolUseID reports the id of the tool call that spawned a
+// subagent, when the event was produced inside that subagent's sidechain.
+// Claude Code marks sidechain output with a non-empty parent_tool_use_id;
+// main-thread output carries none. The field has been seen at the top level
+// of the event and inside the message object, so both are checked.
+func sidechainParentToolUseID(raw map[string]any) string {
+	if id, _ := raw["parent_tool_use_id"].(string); id != "" {
+		return id
+	}
+	if msg, ok := raw["message"].(map[string]any); ok {
+		if id, _ := msg["parent_tool_use_id"].(string); id != "" {
+			return id
+		}
+	}
+	return ""
 }
 
 // isCompactionResult reports whether a `type:"result"` event is actually
@@ -1321,6 +1374,7 @@ func (cs *claudeSession) handleResult(raw map[string]any) {
 		OutputTokens:             outputTokens,
 		CacheCreationInputTokens: cacheCreationTokens,
 		CacheReadInputTokens:     cacheReadTokens,
+		TriggerSource:            cs.turnTriggerSource(raw),
 	}
 	select {
 	case cs.events <- evt:
@@ -1421,6 +1475,13 @@ func (cs *claudeSession) Send(prompt string, messageID string, images []core.Ima
 	if !cs.alive.Load() {
 		return fmt.Errorf("session process is not running")
 	}
+
+	// A new user-initiated turn starts here. Forget the subagent activity of
+	// the previous turn so the next result reports the trigger of the turn
+	// that is actually running. Activity that happens after this point (a
+	// subagent spawned by this turn, completing later) is kept, because the
+	// unsolicited turn it triggers belongs to the same chain.
+	cs.sidechainSeen.Store(false)
 
 	if len(images) == 0 && len(files) == 0 {
 		return cs.writeJSON(map[string]any{
