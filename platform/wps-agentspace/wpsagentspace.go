@@ -20,6 +20,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/BurntSushi/toml"
 	"github.com/chenhg5/cc-connect/config"
@@ -1154,10 +1155,19 @@ func generateUUID() string {
 	return uuid.NewString()
 }
 
-// truncate truncates a string to maxLen characters.
+// truncate truncates a string to maxLen characters. The limit counts
+// characters instead of bytes and the cut never lands inside a multi-byte
+// character, so the result stays valid UTF-8 (Issue #2103).
 func truncate(s string, maxLen int) string {
-	if len(s) <= maxLen {
+	if maxLen <= 0 {
+		return ""
+	}
+	if utf8.RuneCountInString(s) <= maxLen {
 		return s
 	}
-	return s[:maxLen] + "..."
+	r := []rune(s)
+	if len(r) <= maxLen {
+		return s
+	}
+	return string(r[:maxLen]) + "..."
 }
