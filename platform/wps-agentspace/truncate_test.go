@@ -1,6 +1,7 @@
 package wpsagentspace
 
 import (
+	"strings"
 	"testing"
 	"unicode/utf8"
 )
@@ -33,5 +34,32 @@ func TestTruncateKeepsShortString(t *testing.T) {
 	const s = "短"
 	if got := truncate(s, 8); got != s {
 		t.Fatalf("truncate = %q, want %q", got, s)
+	}
+}
+
+// TestTruncateNonPositiveLimit verifies a non-positive limit returns an
+// empty string instead of an ellipsis.
+func TestTruncateNonPositiveLimit(t *testing.T) {
+	for _, maxLen := range []int{0, -1} {
+		if got := truncate("wps 消息", maxLen); got != "" {
+			t.Fatalf("truncate(maxLen=%d) = %q, want %q", maxLen, got, "")
+		}
+	}
+}
+
+// TestTruncatePassesThroughInvalidUTF8 documents that a string that already
+// fits is returned byte for byte, so bytes that are not valid UTF-8 are
+// passed through as-is, while a truncated string is cut on a character
+// boundary.
+func TestTruncatePassesThroughInvalidUTF8(t *testing.T) {
+	const short = "ab\xffcd"
+	if got := truncate(short, 8); got != short {
+		t.Fatalf("truncate = %q, want %q", got, short)
+	}
+
+	long := "\xff" + strings.Repeat("中", 8)
+	got := truncate(long, 4)
+	if !utf8.ValidString(got) {
+		t.Fatalf("truncated string is not valid UTF-8: %q", got)
 	}
 }

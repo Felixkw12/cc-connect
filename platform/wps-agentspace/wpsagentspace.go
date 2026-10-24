@@ -1157,7 +1157,8 @@ func generateUUID() string {
 
 // truncate truncates a string to maxLen characters. The limit counts
 // characters instead of bytes and the cut never lands inside a multi-byte
-// character, so the result stays valid UTF-8 (Issue #2103).
+// character (Issue #2103). A string that already fits is returned unchanged,
+// so bytes that are not valid UTF-8 are passed through as-is.
 func truncate(s string, maxLen int) string {
 	if maxLen <= 0 {
 		return ""
@@ -1165,9 +1166,5 @@ func truncate(s string, maxLen int) string {
 	if utf8.RuneCountInString(s) <= maxLen {
 		return s
 	}
-	r := []rune(s)
-	if len(r) <= maxLen {
-		return s
-	}
-	return string(r[:maxLen]) + "..."
+	return string([]rune(s)[:maxLen]) + "..."
 }

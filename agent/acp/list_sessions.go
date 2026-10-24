@@ -263,7 +263,8 @@ func convertSessionList(entries []acpSessionListEntry, cwdFilter string) []core.
 
 // truncateForLog shortens a string for an error message. The limit counts
 // characters instead of bytes and the cut never lands inside a multi-byte
-// character, so the result stays valid UTF-8 (Issue #2103).
+// character (Issue #2103). A string that already fits is returned unchanged,
+// so bytes that are not valid UTF-8 are passed through as-is.
 func truncateForLog(s string, n int) string {
 	if n <= 0 {
 		return ""
@@ -271,9 +272,5 @@ func truncateForLog(s string, n int) string {
 	if utf8.RuneCountInString(s) <= n {
 		return s
 	}
-	r := []rune(s)
-	if len(r) <= n {
-		return s
-	}
-	return string(r[:n]) + "…"
+	return string([]rune(s)[:n]) + "…"
 }

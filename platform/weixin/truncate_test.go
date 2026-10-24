@@ -1,6 +1,7 @@
 package weixin
 
 import (
+	"strings"
 	"testing"
 	"unicode/utf8"
 )
@@ -34,5 +35,31 @@ func TestTruncateForLogKeepsShortBody(t *testing.T) {
 	const body = "短"
 	if got := truncateForLog([]byte(body), 8); got != body {
 		t.Fatalf("truncateForLog = %q, want %q", got, body)
+	}
+}
+
+// TestTruncateForLogNonPositiveLimit verifies a non-positive limit returns an
+// empty string instead of an ellipsis.
+func TestTruncateForLogNonPositiveLimit(t *testing.T) {
+	for _, max := range []int{0, -1} {
+		if got := truncateForLog([]byte("微信 API"), max); got != "" {
+			t.Fatalf("truncateForLog(max=%d) = %q, want %q", max, got, "")
+		}
+	}
+}
+
+// TestTruncateForLogPassesThroughInvalidUTF8 documents that a body that
+// already fits is returned byte for byte, so a body that is not valid UTF-8
+// stays as it is, while a truncated body is cut on a character boundary.
+func TestTruncateForLogPassesThroughInvalidUTF8(t *testing.T) {
+	short := []byte("ab\xffcd")
+	if got := truncateForLog(short, 8); got != string(short) {
+		t.Fatalf("truncateForLog = %q, want %q", got, short)
+	}
+
+	long := []byte("\xff" + strings.Repeat("中", 8))
+	got := truncateForLog(long, 4)
+	if !utf8.ValidString(got) {
+		t.Fatalf("truncated body is not valid UTF-8: %q", got)
 	}
 }

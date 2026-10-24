@@ -120,7 +120,8 @@ func (c *apiClient) post(ctx context.Context, endpoint string, body []byte, time
 
 // truncateForLog shortens a response body for an error message. The limit
 // counts characters instead of bytes and the cut never lands inside a
-// multi-byte character, so the result stays valid UTF-8 (Issue #2103).
+// multi-byte character (Issue #2103). A body that already fits is returned
+// unchanged, so bytes that are not valid UTF-8 are passed through as-is.
 func truncateForLog(b []byte, max int) string {
 	if max <= 0 {
 		return ""
@@ -129,11 +130,7 @@ func truncateForLog(b []byte, max int) string {
 	if utf8.RuneCountInString(s) <= max {
 		return s
 	}
-	r := []rune(s)
-	if len(r) <= max {
-		return s
-	}
-	return string(r[:max]) + "…"
+	return string([]rune(s)[:max]) + "…"
 }
 
 func (c *apiClient) getUpdates(ctx context.Context, buf string, timeoutMs int) (*getUpdatesResp, error) {

@@ -1,6 +1,7 @@
 package acp
 
 import (
+	"strings"
 	"testing"
 	"unicode/utf8"
 )
@@ -34,5 +35,32 @@ func TestTruncateForLogKeepsShortString(t *testing.T) {
 	const s = "短"
 	if got := truncateForLog(s, 8); got != s {
 		t.Fatalf("truncateForLog = %q, want %q", got, s)
+	}
+}
+
+// TestTruncateForLogNonPositiveLimit verifies a non-positive limit returns an
+// empty string instead of an ellipsis.
+func TestTruncateForLogNonPositiveLimit(t *testing.T) {
+	for _, n := range []int{0, -1} {
+		if got := truncateForLog("acp stderr", n); got != "" {
+			t.Fatalf("truncateForLog(n=%d) = %q, want %q", n, got, "")
+		}
+	}
+}
+
+// TestTruncateForLogPassesThroughInvalidUTF8 documents that a string that
+// already fits is returned byte for byte, so bytes that are not valid UTF-8
+// are passed through as-is, while a truncated string is cut on a character
+// boundary.
+func TestTruncateForLogPassesThroughInvalidUTF8(t *testing.T) {
+	const short = "ab\xffcd"
+	if got := truncateForLog(short, 8); got != short {
+		t.Fatalf("truncateForLog = %q, want %q", got, short)
+	}
+
+	long := "\xff" + strings.Repeat("中", 8)
+	got := truncateForLog(long, 4)
+	if !utf8.ValidString(got) {
+		t.Fatalf("truncated string is not valid UTF-8: %q", got)
 	}
 }
