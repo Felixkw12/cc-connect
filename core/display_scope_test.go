@@ -385,3 +385,196 @@ func sentContainsText(sent []string, want string) bool {
 	}
 	return false
 }
+
+// TestProcessInteractiveEvents_QuietOverridesGroupDefault verifies that
+// `/quiet` in a session with a group default is not shadowed by that default
+// (Issue #2097, P2-1).
+//
+// The group default hides the thinking messages. After `/quiet full` the
+// session must show them again, which is only possible when the command
+// reaches the session scope: the global config is still "full" here, so a
+// command that only wrote the global would leave the group default in place
+// and the thinking message would stay hidden.
+func TestProcessInteractiveEvents_QuietOverridesGroupDefault(t *testing.T) {
+	const (
+		rawKey    = "feishu:oc_a:ou_alice"
+		probeText = "quiet scope probe"
+	)
+
+	run := func(t *testing.T, quietArgs []string) []string {
+		t.Helper()
+		p := &stubMediaPlatform{stubPlatformEngine: stubPlatformEngine{n: "test"}}
+		e := NewEngine("test", &stubAgent{}, []Platform{p}, "", LangEnglish)
+		e.SetDisplayConfig(DisplayCfg{
+			Mode:             "full",
+			ThinkingMessages: true,
+			ToolMessages:     true,
+			ThinkingMaxLen:   300,
+			ToolMaxLen:       500,
+		})
+		e.SetGroupDisplays(map[string]DisplayModeOverride{
+			"feishu:oc_a": {Mode: "quiet", ThinkingMessages: false, ToolMessages: false},
+		})
+
+		if quietArgs != nil {
+			e.cmdQuiet(p, &Message{SessionKey: rawKey, ReplyCtx: "ctx-1"}, quietArgs)
+		}
+
+		interactiveKey := "ws-a:" + rawKey
+		session := e.sessions.GetOrCreateActive(interactiveKey)
+		agentSession := newControllableSession("s1")
+		state := &interactiveState{
+			agentSession:  agentSession,
+			platform:      p,
+			replyCtx:      "ctx-1",
+			rawSessionKey: rawKey,
+		}
+		e.interactiveStates[interactiveKey] = state
+
+		agentSession.events <- Event{Type: EventThinking, Content: probeText}
+		agentSession.events <- Event{Type: EventResult, Content: "done", Done: true}
+		e.processInteractiveEvents(state, session, e.sessions, interactiveKey, "m1", time.Now(), nil, nil, nil, 0)
+		return p.getSent()
+	}
+
+	// Control: without `/quiet` the group default applies and the thinking
+	// message is suppressed. This keeps the assertion below from being
+	// vacuous.
+	if control := run(t, nil); sentContainsText(control, probeText) {
+		t.Fatalf("control run sent %#v, want no thinking message", control)
+	}
+
+	// Regression: `/quiet full` in the session wins over the group default, so
+	// the thinking message is shown again.
+	if got := run(t, []string{"full"}); !sentContainsText(got, probeText) {
+		t.Fatalf("thinking message still suppressed after /quiet full: %#v", got)
+	}
+}
+
+// TestCmdQuiet_CyclesFromEffectiveSessionMode verifies that `/quiet` cycles
+// from the mode that is in effect for the session and not from the global one
+// (Issue #2097, P2-1).
+//
+// The group default is "full" while the global mode is "quiet". The effective
+// mode is the group default, so the cycle lands on "quiet"; reading the
+// global mode instead would produce "compact" and the reply would describe a
+// mode the session never uses.
+func TestCmdQuiet_CyclesFromEffectiveSessionMode(t *testing.T) {
+	e := newDisplayScopeEngine()
+	e.SetDisplayConfig(DisplayCfg{Mode: "quiet", ThinkingMessages: false, ToolMessages: false})
+	e.SetGroupDisplays(map[string]DisplayModeOverride{
+		"feishu:oc_a": {Mode: "full", ThinkingMessages: true, ToolMessages: true},
+	})
+
+	target := "feishu:oc_a:ou_alice"
+	if got := e.displayForSession(target).Mode; got != "full" {
+		t.Fatalf("effective mode = %q, want full (group default)", got)
+	}
+
+	p := &stubMediaPlatform{stubPlatformEngine: stubPlatformEngine{n: "test"}}
+	e.cmdQuiet(p, &Message{SessionKey: target, ReplyCtx: "ctx-1"}, nil)
+
+	if got := e.displayForSession(target).Mode; got != "quiet" {
+		t.Fatalf("mode after /quiet = %q, want quiet", got)
+	}
+}
+
+// TestCmdQuiet_GroupDefaultScopeLeavesGlobalUntouched verifies that `/quiet`
+// in a session with a group default only changes that session: the global
+// config and the config file stay untouched, so the command does not leak
+// into the other groups (Issue #2097, P2-1).
+func TestCmdQuiet_GroupDefaultScopeLeavesGlobalUntouched(t *testing.T) {
+	e := newDisplayScopeEngine()
+	saved := false
+	e.SetDisplaySaveFunc(func(mode *string, thinkingMessages *bool, thinkingMaxLen, toolMaxLen *int, toolMessages *bool) error {
+		saved = true
+		return nil
+	})
+	e.SetGroupDisplays(map[string]DisplayModeOverride{
+		"feishu:oc_a": {Mode: "quiet", ThinkingMessages: false, ToolMessages: false},
+	})
+
+	target := "feishu:oc_a:ou_alice"
+	p := &stubMediaPlatform{stubPlatformEngine: stubPlatformEngine{n: "test"}}
+	e.cmdQuiet(p, &Message{SessionKey: target, ReplyCtx: "ctx-1"}, []string{"compact"})
+
+	if saved {
+		t.Fatal("the session-scoped mode must not be written back to the config file")
+	}
+	if e.display.Mode != "full" {
+		t.Fatalf("global mode = %q, want full (unchanged)", e.display.Mode)
+	}
+	got := e.displayForSession(target)
+	if got.Mode != "compact" {
+		t.Fatalf("session mode = %q, want compact", got.Mode)
+	}
+	if got.ThinkingMessages || got.ToolMessages {
+		t.Fatalf("session thinking/tool = %v/%v, want false/false", got.ThinkingMessages, got.ToolMessages)
+	}
+}
+
+// TestCmdQuiet_GlobalScopeWithoutGroupDefault verifies that a session without
+// a group default keeps the historical behavior of `/quiet`: the global config
+// is updated and written back to the config file.
+func TestCmdQuiet_GlobalScopeWithoutGroupDefault(t *testing.T) {
+	e := newDisplayScopeEngine()
+	saved := false
+	e.SetDisplaySaveFunc(func(mode *string, thinkingMessages *bool, thinkingMaxLen, toolMaxLen *int, toolMessages *bool) error {
+		saved = true
+		if mode == nil || *mode != "quiet" {
+			t.Errorf("persisted mode = %v, want quiet", mode)
+		}
+		return nil
+	})
+
+	target := "feishu:oc_a:ou_alice"
+	p := &stubMediaPlatform{stubPlatformEngine: stubPlatformEngine{n: "test"}}
+	e.cmdQuiet(p, &Message{SessionKey: target, ReplyCtx: "ctx-1"}, nil)
+
+	if !saved {
+		t.Fatal("expected the global mode to be written back to the config file")
+	}
+	if e.display.Mode != "quiet" {
+		t.Fatalf("global mode = %q, want quiet", e.display.Mode)
+	}
+	if e.display.ThinkingMessages || e.display.ToolMessages {
+		t.Fatalf("global thinking/tool = %v/%v, want false/false", e.display.ThinkingMessages, e.display.ToolMessages)
+	}
+	// No session override is created: the session keeps following the global
+	// config, exactly as before.
+	if _, ok := e.sessionDisplayOverride(target); ok {
+		t.Fatal("expected no session override in the global scope")
+	}
+}
+
+// TestCmdQuiet_SessionOverrideScopeKeepsOtherGroupsUntouched verifies that
+// `/quiet` in a session that already carries a session override updates that
+// override instead of the global config (Issue #2097, P2-1). Otherwise the
+// command would be shadowed by the very override it is supposed to change.
+func TestCmdQuiet_SessionOverrideScopeKeepsOtherGroupsUntouched(t *testing.T) {
+	e := newDisplayScopeEngine()
+	saved := false
+	e.SetDisplaySaveFunc(func(mode *string, thinkingMessages *bool, thinkingMaxLen, toolMaxLen *int, toolMessages *bool) error {
+		saved = true
+		return nil
+	})
+
+	target := "feishu:oc_a:ou_alice"
+	if err := e.setSessionDisplayMode(target, "quiet"); err != nil {
+		t.Fatalf("set session mode: %v", err)
+	}
+
+	p := &stubMediaPlatform{stubPlatformEngine: stubPlatformEngine{n: "test"}}
+	e.cmdQuiet(p, &Message{SessionKey: target, ReplyCtx: "ctx-1"}, nil)
+
+	if saved {
+		t.Fatal("the session-scoped mode must not be written back to the config file")
+	}
+	if e.display.Mode != "full" {
+		t.Fatalf("global mode = %q, want full (unchanged)", e.display.Mode)
+	}
+	// The session override decides the cycle: "quiet" cycles to "compact".
+	if got := e.displayForSession(target).Mode; got != "compact" {
+		t.Fatalf("session mode = %q, want compact", got)
+	}
+}

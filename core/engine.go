@@ -10923,6 +10923,20 @@ func (e *Engine) cmdQuiet(p Platform, msg *Message, args []string) {
 	// /quiet [full|compact|quiet]
 	// Without argument: cycle full → quiet → compact → full.
 	// With argument: set mode directly.
+	//
+	// The mode is applied to the scope that decides the mode of the current
+	// session (Issue #2097, P2-1):
+	//   - when a session override or a group default already decides it, the
+	//     command updates the session override, so the group default can no
+	//     longer shadow the command;
+	//   - otherwise the global display config decides it and the command keeps
+	//     its historical behavior: it updates the global config and writes it
+	//     back to the config file.
+	sessionKey := msg.SessionKey
+	// The cycle starts from the mode that is in effect for this session and
+	// not from the global one: with a group default the two differ, and the
+	// reply must describe the mode the session really uses.
+	current := e.displayForSession(sessionKey).Mode
 	var newMode string
 	if len(args) > 0 {
 		switch strings.ToLower(args[0]) {
@@ -10933,7 +10947,7 @@ func (e *Engine) cmdQuiet(p Platform, msg *Message, args []string) {
 			return
 		}
 	} else {
-		switch e.display.Mode {
+		switch current {
 		case "full", "":
 			newMode = "quiet"
 		case "quiet":
@@ -10943,21 +10957,32 @@ func (e *Engine) cmdQuiet(p Platform, msg *Message, args []string) {
 		}
 	}
 
-	e.display.Mode = newMode
-	switch newMode {
-	case "compact", "quiet":
-		e.display.ThinkingMessages = false
-		e.display.ToolMessages = false
-	default:
-		e.display.ThinkingMessages = true
-		e.display.ToolMessages = true
-	}
+	if e.sessionScopeDecidesMode(sessionKey) {
+		// Session scope: the override wins over the group default and is
+		// dropped when the session ends. The global config is left untouched,
+		// so the command does not leak into the other groups.
+		if err := e.setSessionDisplayMode(sessionKey, newMode); err != nil {
+			slog.Error("failed to set the session display mode", "error", err, "mode", newMode)
+			return
+		}
+	} else {
+		// Global scope: unchanged behavior, the mode is persisted.
+		e.display.Mode = newMode
+		switch newMode {
+		case "compact", "quiet":
+			e.display.ThinkingMessages = false
+			e.display.ToolMessages = false
+		default:
+			e.display.ThinkingMessages = true
+			e.display.ToolMessages = true
+		}
 
-	if e.displaySaveFunc != nil {
-		tm := e.display.ThinkingMessages
-		tool := e.display.ToolMessages
-		if err := e.displaySaveFunc(&newMode, &tm, nil, nil, &tool); err != nil {
-			slog.Error("failed to persist display config after /quiet", "error", err)
+		if e.displaySaveFunc != nil {
+			tm := e.display.ThinkingMessages
+			tool := e.display.ToolMessages
+			if err := e.displaySaveFunc(&newMode, &tm, nil, nil, &tool); err != nil {
+				slog.Error("failed to persist display config after /quiet", "error", err)
+			}
 		}
 	}
 
@@ -10969,6 +10994,17 @@ func (e *Engine) cmdQuiet(p Platform, msg *Message, args []string) {
 	default:
 		e.reply(p, msg.ReplyCtx, e.i18n.T(MsgQuietOff))
 	}
+}
+
+// sessionScopeDecidesMode reports whether the display mode of a session is
+// decided by a session override or by a group default instead of the global
+// display config (Issue #2097).
+func (e *Engine) sessionScopeDecidesMode(sessionKey string) bool {
+	if _, ok := e.sessionDisplayOverride(sessionKey); ok {
+		return true
+	}
+	_, ok := e.groupDisplayOverride(sessionKey)
+	return ok
 }
 
 func (e *Engine) cmdTTS(p Platform, msg *Message, args []string) {
