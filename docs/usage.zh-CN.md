@@ -105,7 +105,7 @@ Codex 有两个后端（`backend` 选项），**同一个 mode 在不同后端�
 
 **怎么才会真的弹审批**：只有 `backend = "app_server"` + `mode = "suggest"` 这一条现成路径——`exec` 后端没有审批 IPC，`approval_policy` 只能是 `never`，否则 CLI 会一直等一个永远不会到来的 TTY 响应。
 
-**`app_server_url` 怎么写**：仅 `app_server` 后端用到，推荐 `app_server_url = "stdio"`（会被归一为 `stdio://`）。**版本陷阱**：v1.5.1-beta.3 及更早版本默认是 `ws://127.0.0.1:3845`，在 codex 0.152+ 上每次 `initialize` 都会超时（[#1781](https://github.com/chenhg5/cc-connect/issues/1781)）；当前 main 已把默认改为 `stdio://`（PR [#1786](https://github.com/chenhg5/cc-connect/pull/1786)，仅在 main，尚未进入任何已发布版）。
+**`app_server_url` 怎么写**：仅 `app_server` 后端用到，推荐 `app_server_url = "stdio"`（会被归一为 `stdio://`）。**版本陷阱（重要）**：这个选项**只对包含 [#1786](https://github.com/chenhg5/cc-connect/pull/1786) 的构建生效**（当前 main，尚未进入任何已发布版）。已发布版本（v1.5.1-beta.3 及更早）的 `connect()` 对任何非空 url 都会追加 `--listen`，于是 `stdio` 归一后的 `stdio://` 等于 `--listen stdio://`；在 codex 0.152+ 上只要带 `--listen`，app-server 就只服务监听器、stdio 不响应，每次 `initialize` 都会超时（[#1781](https://github.com/chenhg5/cc-connect/issues/1781)）——**显式写 `app_server_url = "stdio"` 在已发布版上同样会超时**。已发布版请改用 `backend = "exec"`，或等包含 #1786 的版本发布；只有在 codex < 0.152 上，stdio 传输才不受 `--listen` 影响。
 
 ### macOS 上的 Codex CLI 查找
 

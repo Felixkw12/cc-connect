@@ -1739,12 +1739,21 @@ app_secret = "your-feishu-app-secret"
 #                            # "stdio"（推荐）| "ws://host:port" 走 WebSocket 监听器
 # "stdio" is normalized to "stdio://".
 # "stdio" 会被归一为 "stdio://"。
-# Version caveat: releases up to v1.5.1-beta.3 defaulted to "ws://127.0.0.1:3845",
-# which makes every initialize time out on codex 0.152+ (see #1781). Current main
-# defaults to "stdio://" (PR #1786, not in any released version yet).
-# 版本注意：v1.5.1-beta.3 及更早版本默认是 "ws://127.0.0.1:3845"，在 codex 0.152+
-# 上每次 initialize 都会超时（见 #1781）；当前 main 的默认已是 "stdio://"
-# （PR #1786，尚未进入任何已发布版）。
+# Version caveat: this option only works on builds that include #1786 (current main,
+# not in any released version yet). Released builds up to v1.5.1-beta.3 append
+# "--listen" to any non-empty url, so "stdio" -> "stdio://" -> "--listen stdio://";
+# on codex 0.152+ any --listen makes the app-server serve the listener only, so stdio
+# stays unresponsive and every initialize times out (see #1781) — setting
+# app_server_url = "stdio" explicitly does NOT help there. On a released build use
+# backend = "exec", or wait for a release that includes #1786; only on codex < 0.152
+# is the stdio transport unaffected by --listen.
+# 版本注意：此选项只对包含 #1786 的构建生效（当前 main，尚未进入任何已发布版）。
+# 已发布版本（v1.5.1-beta.3 及更早）对任何非空 url 都会追加 "--listen"，
+# 于是 "stdio" -> "stdio://" -> "--listen stdio://"；在 codex 0.152+ 上只要带
+# --listen，app-server 就只服务监听器、stdio 不响应，每次 initialize 都会超时
+# （见 #1781）—— 显式写 app_server_url = "stdio" 在已发布版上同样无效。
+# 已发布版请用 backend = "exec"，或等包含 #1786 的版本发布；只有在 codex < 0.152
+# 上 stdio 传输才不受 --listen 影响。
 #
 # Optional: project system prompt / 可选：项目系统提示
 # Codex has no native system-prompt flag, so cc-connect injects this as a
